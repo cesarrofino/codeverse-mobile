@@ -1,0 +1,65 @@
+name: Build APK
+
+# Corre sozinho a cada push e também manualmente (separador Actions -> Build APK -> Run workflow).
+# Funciona de duas formas:
+#   A) o projeto está extraído na raiz do repositório (settings.gradle.kts na raiz); ou
+#   B) enviaste só um ficheiro .zip do projeto para a raiz do repositório (ideal a partir do telemóvel).
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Localizar projeto (extrai o ZIP se necessário)
+        id: detect
+        run: |
+          if [ -f settings.gradle.kts ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            z=$(ls -1 ./*.zip 2>/dev/null | head -n1 || true)
+            if [ -z "$z" ]; then echo "Não encontrei o projeto nem um .zip na raiz do repositório."; exit 1; fi
+            mkdir -p _src && unzip -q -o "$z" -d _src
+            s=$(find _src -name settings.gradle.kts | head -n1)
+            if [ -z "$s" ]; then echo "O ZIP não contém settings.gradle.kts."; exit 1; fi
+            echo "dir=$(dirname "$s")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar plataforma Android
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Gerar interface web (CodeMirror + Pyodide)
+        working-directory: ${{ steps.detect.outputs.dir }}/web
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Compilar APK (debug, assinado com a chave de debug)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeVerse-Mobile-APK
+          path: ${{ steps.detect.outputs.dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
