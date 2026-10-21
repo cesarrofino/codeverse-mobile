@@ -13,6 +13,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Obter ficheiros do repositorio
@@ -28,6 +29,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar plataforma Android
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -53,6 +60,10 @@ jobs:
       - name: Gerar interface web (editor + Python offline)
         run: |
           ROOT_PROJECT_DIR=$(find extracted_project -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs dirname)
+          if [ -z "$ROOT_PROJECT_DIR" ]; then
+            echo "Erro: settings.gradle.kts nao encontrado no projeto!"
+            exit 1
+          fi
           echo "ROOT_PROJECT_DIR=$ROOT_PROJECT_DIR" >> "$GITHUB_ENV"
           cd "$ROOT_PROJECT_DIR/web"
           npm install --no-audit --no-fund
@@ -62,7 +73,7 @@ jobs:
         run: |
           cd "$ROOT_PROJECT_DIR"
           set -o pipefail
-          gradle :app:assembleDebug --console=plain 2>&1 | tee build.log || {
+          gradle :app:assembleDebug --no-daemon --console=plain 2>&1 | tee build.log || {
             echo "===== ERROS DE COMPILACAO ====="
             grep -E "^e: |What went wrong" -A4 build.log | head -80
             exit 1
