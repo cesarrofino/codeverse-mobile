@@ -30,11 +30,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Configurar Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Instalar plataforma Android
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      - name: Instalar plataforma Android (SDK ja vem no runner)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
