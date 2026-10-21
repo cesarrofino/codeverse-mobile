@@ -1,0 +1,87 @@
+name: Compilar CodeVerse Android
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.zip'
+      - 'settings.gradle.kts'
+      - 'app/**'
+      - 'web/**'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Obter ficheiros do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar plataforma Android
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.9
+
+      - name: Localizar projeto (extrai o ZIP se necessario)
+        run: |
+          rm -rf extracted_project
+          if [ -f settings.gradle.kts ]; then
+            mkdir extracted_project
+            shopt -s dotglob
+            for f in *; do [ "$f" != "extracted_project" ] && [ "$f" != ".git" ] && cp -r "$f" extracted_project/; done
+          else
+            Z=$(ls -1 ./*.zip 2>/dev/null | head -n 1)
+            if [ -z "$Z" ]; then
+              echo "Erro: nenhum .zip encontrado na raiz do repositorio!"
+              exit 1
+            fi
+            unzip -o "$Z" -d extracted_project
+          fi
+
+      - name: Gerar interface web (editor + Python offline)
+        run: |
+          ROOT_PROJECT_DIR=$(find extracted_project -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs dirname)
+          if [ -z "$ROOT_PROJECT_DIR" ]; then
+            echo "Erro: settings.gradle.kts nao encontrado no projeto!"
+            exit 1
+          fi
+          echo "ROOT_PROJECT_DIR=$ROOT_PROJECT_DIR" >> "$GITHUB_ENV"
+          cd "$ROOT_PROJECT_DIR/web"
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Compilar APK
+        run: |
+          cd "$ROOT_PROJECT_DIR"
+          set -o pipefail
+          gradle :app:assembleDebug --no-daemon --console=plain 2>&1 | tee build.log || {
+            echo "===== ERROS DE COMPILACAO ====="
+            grep -E "^e: |What went wrong" -A4 build.log | head -80
+            exit 1
+          }
+
+      - name: Disponibilizar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeVerse-Mobile-APK
+          path: extracted_project/**/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
