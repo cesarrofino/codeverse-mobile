@@ -121,55 +121,6 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
-      - name: Compilar BusyBox com o NDK (terminal Linux)
-        run: |
-          # O BusyBox tem de ser compilado contra o bionic (NDK), estático. Os binários musl de busybox.net
-          # fazem syscalls que o Android bloqueia (SIGSYS, código 159). Se a compilação falhar, o APK sai na
-          # mesma e o terminal usa a shell do Android (/system/bin/sh).
-          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}}"
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          BBV=1.36.1
-          LIBS="$GITHUB_WORKSPACE/$ROOT_PROJECT_DIR/app/src/main/jniLibs"
-          WORK="$RUNNER_TEMP/busybox"
-          mkdir -p "$WORK"
-          if [ ! -d "$TC" ] || ! curl -fsSL --retry 3 --connect-timeout 20 -o "$WORK/bb.tar.bz2" "https://busybox.net/downloads/busybox-$BBV.tar.bz2"; then
-            echo "::warning::NDK ou codigo-fonte do BusyBox indisponivel (o terminal usa a shell do Android)"
-            exit 0
-          fi
-          tar -xjf "$WORK/bb.tar.bz2" -C "$WORK"
-          SRC="$WORK/busybox-$BBV"
-          build() {  # $1 = pasta ABI, $2 = triple do clang
-            B="$WORK/out-$1"
-            rm -rf "$B"; mkdir -p "$B"
-            cp -r "$SRC/." "$B/"
-            cd "$B"
-            make defconfig > /dev/null
-            cfg() { sed -i "s/^# CONFIG_$1 is not set/CONFIG_$1=y/;s/^CONFIG_$1=.*/CONFIG_$1=$2/" .config; }
-            off() { for k in "$@"; do sed -i "s/^CONFIG_$k=.*/# CONFIG_$k is not set/" .config; done; }
-            cfg STATIC y
-            # Funcionalidades que o bionic nao tem (crypt, utmp, rpc, selinux, swap, syslog...) ou que dao erro com o NDK
-            off SELINUX FEATURE_HAVE_RPC FEATURE_MOUNT_NFS FEATURE_UTMP FEATURE_WTMP WHO USERS LAST WALL \
-                SWAPONOFF FEATURE_SWAPON_DISCARD FEATURE_SWAPON_PRI HOSTID SYSLOGD KLOGD LOGGER LOGREAD \
-                FEATURE_SHADOWPASSWDS FEATURE_USE_SENDFILE LOGIN SU SULOGIN PASSWD ADDUSER ADDGROUP DELUSER DELGROUP \
-                GETTY VLOCK CRYPTPW MKPASSWD CHPASSWD TC NSENTER UNSHARE FSCK_MINIX MKFS_MINIX MKFS_EXT2 MKFS_REISER \
-                MKFS_VFAT SHA1_HWACCEL SHA256_HWACCEL FEATURE_EJECT_SCSI EJECT FEATURE_TELNETD_STANDALONE TELNETD \
-                HUSH SHELL_HUSH INIT LINUXRC HALT POWEROFF REBOOT FEATURE_SYSTEMD UDHCPD UDHCPC UDHCPC6 DHCPRELAY \
-                DUMPLEASES PAM FEATURE_IPV6 PING6 TRACEROUTE6 UBIATTACH UBIDETACH UBIMKVOL UBIRMVOL UBIRSVOL UBIUPDATEVOL UBIRENAME
-            yes "" | make oldconfig > /dev/null 2>&1 || true
-            make -j"$(nproc)" \
-              CC="$TC/$2-clang" HOSTCC=gcc AR="$TC/llvm-ar" STRIP="$TC/llvm-strip" CONFIG_CROSS_COMPILER_PREFIX="" \
-              EXTRA_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types" \
-              busybox > "$WORK/build-$1.log" 2>&1 || { tail -40 "$WORK/build-$1.log"; return 1; }
-            mkdir -p "$LIBS/$1"
-            cp busybox "$LIBS/$1/libbusybox.so"
-            chmod 755 "$LIBS/$1/libbusybox.so"
-            echo "BusyBox $1 OK ($(stat -c %s "$LIBS/$1/libbusybox.so") bytes)"
-          }
-          for t in "arm64-v8a aarch64-linux-android26" "armeabi-v7a armv7a-linux-androideabi26" "x86_64 x86_64-linux-android26"; do
-            set -- $t
-            ( build "$1" "$2" ) || echo "::warning::Falhou o BusyBox $1 (o terminal usa a shell do Android nesse ABI)"
-          done
-
       - name: Compilar APK
         run: |
           cd "$ROOT_PROJECT_DIR"
