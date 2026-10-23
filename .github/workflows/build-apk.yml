@@ -1,0 +1,161 @@
+name: Compilar CodeVerse Android
+
+ 
+on:
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Versão (ex.: 1.0.1). Vazio = a do update.json'
+        required: false
+        default: ''
+      publicar:
+        description: 'Publicar o APK numa Release (v<versão>)'
+        type: boolean
+        required: false
+        default: false
+  release:
+    types: [published]
+  push:
+    paths:
+      - '*.zip'
+      - 'settings.gradle.kts'
+      - 'app/**'
+      - 'web/**'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Obter ficheiros do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar plataforma Android (SDK ja vem no runner)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(command -v sdkmanager)"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Localizar projeto (extrai o ZIP se necessario)
+        run: |
+          rm -rf extracted_project
+          if [ -f settings.gradle.kts ]; then
+            mkdir extracted_project
+            shopt -s dotglob
+            for f in *; do
+              if [ "$f" != "extracted_project" ] && [ "$f" != ".git" ]; then cp -r "$f" extracted_project/; fi
+            done
+          else
+            Z=$(ls -1 ./*.zip 2>/dev/null | head -n 1 || true)
+            if [ -z "$Z" ]; then
+              echo "Erro: nenhum .zip encontrado na raiz do repositorio!"
+              exit 1
+            fi
+            echo "A extrair $Z"
+            unzip -q -o "$Z" -d extracted_project
+          fi
+          ROOT_PROJECT_DIR=$(find extracted_project \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1 | xargs -r dirname)
+          if [ -z "$ROOT_PROJECT_DIR" ]; then
+            echo "Erro: settings.gradle.kts nao encontrado no projeto!"
+            exit 1
+          fi
+          echo "ROOT_PROJECT_DIR=$ROOT_PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Definir versao
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSAO: ${{ github.event.inputs.versao }}
+        run: |
+          V=""
+          if [ -n "$RELEASE_TAG" ]; then V="${RELEASE_TAG#v}"
+          elif [ -n "$INPUT_VERSAO" ]; then V="${INPUT_VERSAO#v}"
+          elif [ -f "$ROOT_PROJECT_DIR/update.json" ]; then
+            V=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('version',''))" "$ROOT_PROJECT_DIR/update.json" 2>/dev/null || true)
+            V="${V#v}"
+          fi
+          if ! echo "$V" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            [ -n "$V" ] && echo "Versao '$V' invalida; a usar 1.0.1"
+            V="1.0.1"
+          fi
+          echo "APP_VERSION=$V" >> "$GITHUB_ENV"
+          echo "Versao do APK: $V"
+
+      - name: Gerar interface web (editor + Python offline)
+        env:
+          # Segredos (Settings > Secrets and variables > Actions > Secrets).
+          # Cada um pode ter varias chaves separadas por virgula: chave1,chave2,chave3
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          # Opcionais (separador Variables). Sem eles usa gemini-3.8-flash e openrouter/auto.
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_REASONING: ${{ vars.GEMINI_REASONING }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: |
+          cd "$ROOT_PROJECT_DIR/web"
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Compilar APK
+        run: |
+          cd "$ROOT_PROJECT_DIR"
+          set -o pipefail
+          gradle :app:assembleDebug -PappVersion="$APP_VERSION" --no-daemon --console=plain 2>&1 | tee build.log || {
+            echo "===== ERROS DE COMPILACAO ====="
+            grep -E "^e: |What went wrong" -A4 build.log | head -80
+            exit 1
+          }
+
+      - name: Preparar APK
+        run: |
+          APK=$(ls "$ROOT_PROJECT_DIR"/app/build/outputs/apk/debug/*.apk | head -n 1)
+          mkdir -p dist
+          cp "$APK" dist/CodeVerse.apk
+          ls -l dist
+
+      - name: Disponibilizar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeVerse-Mobile-APK
+          path: dist/CodeVerse.apk
+          if-no-files-found: error
+
+      - name: Anexar APK a Release
+        if: github.event_name == 'release' || github.event.inputs.publicar == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG="${RELEASE_TAG:-v$APP_VERSION}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/CodeVerse.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/CodeVerse.apk --repo "$GITHUB_REPOSITORY" \
+              --title "CodeVerse $APP_VERSION" --notes "CodeVerse $APP_VERSION"
+          fi
+          echo "APK publicado em $TAG"
