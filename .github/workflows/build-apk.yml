@@ -93,11 +93,11 @@ jobs:
           INPUT_VERSAO: ${{ github.event.inputs.versao }}
         run: |
           V=""
-          if [ -n "$RELEASE_TAG" ]; then V="${RELEASE_TAG#v}"
-          elif [ -n "$INPUT_VERSAO" ]; then V="${INPUT_VERSAO#v}"
+          if [ -n "$RELEASE_TAG" ]; then V="${RELEASE_TAG#[vV]}"
+          elif [ -n "$INPUT_VERSAO" ]; then V="${INPUT_VERSAO#[vV]}"
           elif [ -f "$ROOT_PROJECT_DIR/update.json" ]; then
             V=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('version',''))" "$ROOT_PROJECT_DIR/update.json" 2>/dev/null || true)
-            V="${V#v}"
+            V="${V#[vV]}"
           fi
           if ! echo "$V" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
             [ -n "$V" ] && echo "Versao '$V' invalida; a usar 1.0.1"
