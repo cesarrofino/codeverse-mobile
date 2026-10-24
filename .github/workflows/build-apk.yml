@@ -109,12 +109,9 @@ jobs:
       - name: Gerar interface web (editor + Python offline)
         env:
           # Segredos (Settings > Secrets and variables > Actions > Secrets).
-          # Cada um pode ter varias chaves separadas por virgula: chave1,chave2,chave3
-          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          # Varias chaves separadas por virgula: chave1,chave2,chave3,chave4,chave5
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
-          # Opcionais (separador Variables). Sem eles usa gemini-3.8-flash e openrouter/auto.
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-          GEMINI_REASONING: ${{ vars.GEMINI_REASONING }}
+          # Opcional (separador Variables). Sem ele usa openrouter/auto.
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: |
           cd "$ROOT_PROJECT_DIR/web"
